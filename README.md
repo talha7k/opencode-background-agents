@@ -101,7 +101,7 @@ cd ~/.config/opencode && npm install github:talha7k/opencode-background-agents#m
 
 # 2. shim it into the plugins directory
 cat > ~/.config/opencode/plugins/background-agents.ts <<'EOF'
-import BackgroundAgentsPlugin from "@talha7k/opencode-background-agents"
+import BackgroundAgentsPlugin from "opencode-background-agents-talha7k"
 export default BackgroundAgentsPlugin
 EOF
 ```

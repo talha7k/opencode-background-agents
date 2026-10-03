@@ -1,5 +1,5 @@
 {
-  "name": "@talha7k/opencode-background-agents",
+  "name": "opencode-background-agents-talha7k",
   "version": "0.1.1",
   "description": "Async, supervised background agent delegation for OpenCode - delegate, steer, stop, and persist sub-agent work.",
   "keywords": [
