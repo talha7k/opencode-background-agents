@@ -375,7 +375,7 @@ class DelegationManager {
 	 */
 	private scheduleComplete(id: string): void {
 		const delegation = this.delegations.get(id)
-		if (!delegation || isTerminalStatus(delegation.status)) return
+		if (!delegation || isTerminalStatus(delegation.status) || delegation.status === "paused") return
 		this.cancelScheduledComplete(id)
 		const timer = setTimeout(() => {
 			this.completeTimers.delete(id)
@@ -1089,6 +1089,175 @@ class DelegationManager {
 		}
 	}
 
+	/**
+	 * HOUSE ADDITION (2026-10-03): delegation_resume — continue a TERMINAL delegation
+	 * (complete | error) by prompting its EXISTING child session. The ID is stable; the
+	 * previous artifact is archived as <id>.run<N>.md; a fresh timeout window starts and
+	 * a new <task-notification> is delivered at the next terminal state. Timeout and
+	 * cancelled (stop) delegations are NOT resumable: upstream hard-deletes their child
+	 * sessions, so the honest answer is re-delegate. Registered → running transition
+	 * re-arms the terminal waiter, timeout, parent-pending set, and notification cycle.
+	 */
+	async resumeDelegation(
+		id: string,
+		prompt: string | undefined,
+		opts: { maxRunTimeMs?: number; model?: { providerID: string; modelID: string } },
+	): Promise<{ ok: true; record: DelegationRecord } | { ok: false; message: string }> {
+		const delegation = this.delegations.get(id)
+		if (!delegation) {
+			return {
+				ok: false,
+				message: `Delegation "${id}" not found in this session tree. Use delegation_list(); across an opencode restart the child context is gone — re-delegate instead.`,
+			}
+		}
+		if (delegation.status === "running" || delegation.status === "registered") {
+			return {
+				ok: false,
+				message: `Delegation "${id}" is ${delegation.status}. Use delegation_steer("${id}", ...) to redirect it, or delegation_pause to freeze it.`,
+			}
+		}
+		// "paused" and all terminal states are resumable.
+		try {
+			await this.client.session.get({ path: { id: delegation.sessionID } })
+		} catch {
+			return {
+				ok: false,
+				message: `Child session of "${id}" no longer exists (timeout/stop hard-deletes it). Re-delegate with delegate() instead.`,
+			}
+		}
+
+		const followUp = prompt?.trim() || "Continue where you stopped."
+		const resumeCount = (delegation.resumeCount ?? 1) + 1
+		try {
+			await fs.rename(
+				delegation.artifact.filePath,
+				path.join(path.dirname(delegation.artifact.filePath), `${id}.run${resumeCount - 1}.md`),
+			)
+		} catch {
+			// No artifact yet (e.g. errored before producing output) — nothing to archive.
+		}
+
+		const now = new Date()
+		const maxRunTimeMs = opts.maxRunTimeMs ?? delegation.maxRunTimeMs
+		delegation.resumeCount = resumeCount
+		delegation.status = "running"
+		delegation.startedAt = now
+		delegation.completedAt = undefined
+		delegation.error = undefined
+		delegation.result = undefined
+		delegation.updatedAt = now
+		delegation.timeoutAt = isUnlimitedRunTime(maxRunTimeMs)
+			? undefined
+			: new Date(now.getTime() + maxRunTimeMs)
+		delegation.maxRunTimeMs = maxRunTimeMs
+		if (opts.model !== undefined) {
+			delegation.model = `${opts.model.providerID}/${opts.model.modelID}`
+		}
+		delegation.progress = { toolCalls: 0, lastUpdateAt: now, lastHeartbeatAt: now }
+		delegation.notification = { terminalNotificationCount: 0 }
+		delegation.retrieval = { retrievalCount: 0 }
+		delegation.artifact = {
+			filePath: path.join(path.dirname(delegation.artifact.filePath), `${id}.md`),
+		}
+
+		// Re-arm the terminal waiter (the previous one resolved at finalization), the
+		// parent-pending set, and the parent's current notification cycle.
+		this.terminalWaiters.delete(id)
+		this.createTerminalWaiter(id)
+		if (!this.pendingByParent.has(delegation.parentSessionID)) {
+			this.pendingByParent.set(delegation.parentSessionID, new Set())
+			this.resetParentAllCompleteNotificationCycle(delegation.parentSessionID)
+		}
+		this.pendingByParent.get(delegation.parentSessionID)?.add(id)
+		const parentState = this.getParentNotificationState(delegation.parentSessionID)
+		delegation.notificationCycle = parentState.allCompleteCycle
+		delegation.notificationCycleToken = parentState.allCompleteCycleToken
+
+		this.scheduleTimeout(id)
+		this.markStarted(id)
+		this.persistState(id)
+
+		void this.showToast(
+			`Delegation resumed: ${delegation.id} → ${delegation.agent} (attempt ${resumeCount})`,
+			"info",
+		)
+
+		// Fire the follow-up into the SAME child session, mirroring the original launch:
+		// turn errors finalize as `error`, resolution schedules the debounced complete.
+		// Delegation-control tools stay disabled (anti-recursion).
+		this.client.session
+			.prompt({
+				path: { id: delegation.sessionID },
+				body: {
+					agent: delegation.agent,
+					...(opts.model !== undefined ? { model: opts.model } : {}),
+					parts: [{ type: "text", text: followUp }],
+					tools: {
+						task: false,
+						delegate: false,
+						delegation_steer: false,
+						delegation_stop: false,
+						delegation_status: false,
+						delegation_peek: false,
+						delegation_read: false,
+						delegation_list: false,
+						todowrite: false,
+						plan_save: false,
+					},
+				},
+			})
+			.then((result) => {
+				const turnError = this.extractTurnError(result)
+				if (turnError) {
+					void this.finalizeDelegation(delegation.id, "error", turnError)
+					return
+				}
+				this.scheduleComplete(delegation.id)
+			})
+			.catch((error: Error) => {
+				void this.finalizeDelegation(delegation.id, "error", error.message)
+			})
+
+		return { ok: true, record: delegation }
+	}
+
+	/**
+	 * HOUSE ADDITION (2026-10-03): delegation_pause — freeze a RUNNING delegation.
+	 * Aborts the child turn WITHOUT deleting the session and clears the timeout and
+	 * debounced-completion timers, so nothing finalizes while paused. delegation_resume
+	 * continues the same session later. Pause is best-effort across opencode restarts:
+	 * a restored paused delegation whose session reads settled may be finalized instead.
+	 */
+	async pauseDelegation(id: string): Promise<{ ok: true; record: DelegationRecord } | { ok: false; message: string }> {
+		const delegation = this.delegations.get(id)
+		if (!delegation) {
+			return { ok: false, message: `Delegation "${id}" not found. Use delegation_list().` }
+		}
+		if (isTerminalStatus(delegation.status)) {
+			return { ok: false, message: `Delegation "${id}" is already terminal (${delegation.status}).` }
+		}
+		if (delegation.status === "paused") {
+			return { ok: false, message: `Delegation "${id}" is already paused. Use delegation_resume("${id}").` }
+		}
+		// Freeze timers FIRST: a pending timeout or debounced completion must never
+		// finalize a paused delegation behind its back.
+		this.cancelScheduledComplete(id)
+		this.clearTimeoutTimer(id)
+		try {
+			await this.client.session.abort({ path: { id: delegation.sessionID } })
+		} catch (error) {
+			await this.debugLog(`pauseDelegation: abort failed for ${id}: ${error instanceof Error ? error.message : String(error)}`)
+		}
+		const now = new Date()
+		delegation.status = "paused"
+		delegation.pausedAt = now
+		delegation.updatedAt = now
+		delegation.progress.lastHeartbeatAt = now
+		this.persistState(id)
+		void this.showToast(`Delegation paused: ${delegation.id}`, "info")
+		return { ok: true, record: delegation }
+	}
+
 	private async generateUniqueDelegationId(artifactDir: string): Promise<string> {
 		for (let attempt = 0; attempt < 20; attempt++) {
 			const candidate = this.idGenerator()
@@ -1221,6 +1390,9 @@ class DelegationManager {
 		status: DelegationTerminalStatus,
 		error?: string,
 	): Promise<void> {
+		// HOUSE ADDITION (2026-10-03): a paused delegation swallows late abort/turn
+		// completions from its frozen prompt — resume re-arms everything it needs.
+		if (this.delegations.get(delegationId)?.status === "paused") return
 		const { transitioned, delegation } = this.markTerminal(delegationId, status, error)
 		if (!transitioned || !delegation) return
 
@@ -1345,7 +1517,11 @@ class DelegationManager {
 
 		const artifactDir = await this.ensureDelegationsDir(input.parentSessionID)
 		const rootSessionID = await this.getRootSessionID(input.parentSessionID)
-		const stableId = await this.generateUniqueDelegationId(artifactDir)
+		// HOUSE PATCH (2026-10-03): prefix delegation IDs with the agent name
+		// (e.g. explore-spare-moccasin-peafowl) so IDs identify the child role.
+		// Re-applied via patch-package (postinstall). Upstream PR candidate.
+		const agentPrefix = input.agent.replace(/[^a-zA-Z0-9_-]/g, '')
+		const stableId = `${agentPrefix}-${await this.generateUniqueDelegationId(artifactDir)}`
 		const artifactPath = path.join(artifactDir, `${stableId}.md`)
 
 		await this.debugLog(`delegate() called, generated stable ID: ${stableId}`)
@@ -1496,7 +1672,7 @@ class DelegationManager {
 	 */
 	async handleSessionIdle(sessionID: string): Promise<void> {
 		const delegation = this.findBySession(sessionID)
-		if (!delegation || isTerminalStatus(delegation.status)) return
+		if (!delegation || isTerminalStatus(delegation.status) || delegation.status === "paused") return
 
 		await this.debugLog(`handleSessionIdle for delegation ${delegation.id}`)
 		this.scheduleComplete(delegation.id)

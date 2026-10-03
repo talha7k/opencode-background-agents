@@ -27,6 +27,9 @@ import type { OpencodeClient } from "./primitives/types"
 import { DELEGATION_RULES } from "./rules"
 import { deserializeDelegation, serializeDelegation } from "./state"
 import {
+	createDelegationPause,
+	createDelegationPause,
+	createDelegationResume,
 	createDelegate,
 	createDelegationList,
 	createDelegationPeek,
@@ -74,6 +77,9 @@ const BackgroundAgentsPlugin: Plugin = async (ctx) => {
 
 	return {
 		tool: {
+			delegation_pause: createDelegationPause(manager),
+			delegation_pause: createDelegationPause(manager),
+			delegation_resume: createDelegationResume(manager),
 			delegate: createDelegate(manager),
 			delegation_read: createDelegationRead(manager),
 			delegation_list: createDelegationList(manager),

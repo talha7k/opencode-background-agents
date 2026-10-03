@@ -10,6 +10,88 @@ interface DelegateArgs {
 	model?: string
 }
 
+export function createDelegationPause(manager: DelegationManager): ReturnType<typeof tool> {
+	return tool({
+		description: `Pause a RUNNING delegation: aborts its current turn WITHOUT deleting the child session and freezes the timeout/completion timers. The transcript is frozen on disk; delegation_resume(id) later continues the SAME session (optionally with new instructions). Terminal delegations cannot be paused.`,
+		args: {
+			id: tool.schema
+				.string()
+				.describe("Delegation ID to pause (from delegation_list / delegation_status)."),
+		},
+		async execute(args, toolCtx) {
+			if (!toolCtx?.sessionID) {
+				return "❌ delegation_pause requires sessionID. This is a system error."
+			}
+			const result = await manager.pauseDelegation(args.id)
+			if (!result.ok) return `❌ ${result.message}`
+			return `⏸️ Paused ${result.record.id}. Transcript frozen on disk; delegation_resume("${result.record.id}") continues the same session (instructions optional). Timers stay frozen while paused.`
+		},
+	})
+}
+
+export function createDelegationPause(manager: DelegationManager): ReturnType<typeof tool> {
+	return tool({
+		description: `Pause a RUNNING delegation: aborts its current turn WITHOUT deleting the child session and freezes the timeout/completion timers. The transcript is frozen on disk; delegation_resume(id) later continues the SAME session (optionally with new instructions). Terminal delegations cannot be paused.`,
+		args: {
+			id: tool.schema
+				.string()
+				.describe("Delegation ID to pause (from delegation_list / delegation_status)."),
+		},
+		async execute(args, toolCtx) {
+			if (!toolCtx?.sessionID) {
+				return "❌ delegation_pause requires sessionID. This is a system error."
+			}
+			const result = await manager.pauseDelegation(args.id)
+			if (!result.ok) return `❌ ${result.message}`
+			return `⏸️ Paused ${result.record.id}. Transcript frozen on disk; delegation_resume("${result.record.id}") continues the same session (instructions optional). Timers stay frozen while paused.`
+		},
+	})
+}
+
+export function createDelegationResume(manager: DelegationManager): ReturnType<typeof tool> {
+	return tool({
+		description: `Resume a TERMINAL delegation (complete or error) by prompting its existing child session — the ID stays the same, previous output is archived as <id>.run<N>.md, a fresh timeout window starts, and a new <task-notification> arrives at the next terminal state. Use after a usage-limit death ("continue after quota reset" + state so far) or to follow up on a completed run. NOT resumable: timeout/cancelled delegations (their sessions are deleted — re-delegate instead); running delegations (use delegation_steer).`,
+		args: {
+			id: tool.schema
+				.string()
+				.describe("Delegation ID to resume (from delegation_list / delegation_status / the original notification)."),
+			prompt: tool.schema
+				.string()
+				.describe("Follow-up instruction delivered to the SAME child session (e.g. 'continue where you stopped' + the state so far)."),
+			timeout_minutes: tool.schema
+				.number()
+				.int()
+				.min(0)
+				.optional()
+				.describe("Fresh timeout window in minutes (default: the delegation's previous window). 0 = no timeout."),
+			model: tool.schema
+				.string()
+				.optional()
+				.describe('Optional model override for the resumed run as "provider/model-id".'),
+		},
+		async execute(args, toolCtx) {
+			if (!toolCtx?.sessionID) {
+				return "❌ delegation_resume requires sessionID. This is a system error."
+			}
+			let model: ReturnType<typeof parseModelString> | undefined
+			if (args.model !== undefined) {
+				model = parseModelString(args.model)
+				if (!model) return `❌ Invalid model "${args.model}" — use "provider/model-id".`
+			}
+			const maxRunTimeMs =
+				args.timeout_minutes === undefined ? undefined : args.timeout_minutes * 60_000
+			const result = await manager.resumeDelegation(args.id, args.prompt, { maxRunTimeMs, model })
+			if (!result.ok) return `❌ ${result.message}`
+			const r = result.record
+			return [
+				`✅ Resumed ${r.id} (attempt ${r.resumeCount}) → ${r.agent}${r.model ? ` (${r.model})` : ""}.`,
+				`Previous output archived as <id>.run${r.resumeCount - 1}.md.`,
+				`A <task-notification> arrives at the next terminal state; delegation_status()/delegation_peek() to watch.`,
+			].join(" ")
+		},
+	})
+}
+
 function createDelegate(manager: DelegationManager): ReturnType<typeof tool> {
 	return tool({
 		description: `Delegate a task to an agent. Returns immediately with a readable ID.

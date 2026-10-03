@@ -11,7 +11,7 @@ interface AssistantSessionMessageItem {
 	parts: Part[]
 }
 
-type DelegationStatus = "registered" | "running" | "complete" | "error" | "cancelled" | "timeout"
+type DelegationStatus = "registered" | "running" | "paused" | "complete" | "error" | "cancelled" | "timeout"
 
 type DelegationTerminalStatus = Extract<
 	DelegationStatus,
@@ -88,6 +88,14 @@ interface DelegationRecord {
 	title?: string
 	description?: string
 	result?: string
+	/** HOUSE ADDITION (2026-10-03): delegation_resume continuations of this run. */
+	resumeCount?: number
+	/** HOUSE ADDITION (2026-10-03): set while a running delegation is paused. */
+	pausedAt?: Date
+	/** HOUSE ADDITION (2026-10-03): set while a running delegation is paused. */
+	pausedAt?: Date
+	/** HOUSE ADDITION (2026-10-03): set while a running delegation is paused. */
+	pausedAt?: Date
 }
 
 // Default max runtime. Overridable globally via BACKGROUND_AGENTS_TIMEOUT_MINUTES and
@@ -226,6 +234,9 @@ function parsePersistedStatus(raw: string | undefined): DelegationStatus {
 	if (!raw) return "complete"
 	if (raw === "registered") return "registered"
 	if (raw === "running") return "running"
+	if (raw === "paused") return "paused"
+	if (raw === "paused") return "paused"
+	if (raw === "paused") return "paused"
 	if (raw === "complete") return "complete"
 	if (raw === "error") return "error"
 	if (raw === "cancelled") return "cancelled"
