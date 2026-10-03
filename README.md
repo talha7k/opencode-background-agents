@@ -57,6 +57,12 @@ idle-event paths ignore paused records.
 New record fields: `resumeCount`, `pausedAt`. New status: `"paused"`
 (included in state persistence + restore parsing).
 
+**Recommended:** set `BACKGROUND_AGENTS_KEEP_CHILD_SESSIONS=1` (the upstream
+knob this fork is tested with). Finished child sessions are then kept instead
+of deleted, so `delegation_resume` continues them **in place with full
+transcript continuity**. Without it, resume still works — it rebuilds context
+in a fresh session from the archived output.
+
 ### 4. Supervision lifecycle at a glance
 
 ```
