@@ -97,11 +97,11 @@ This fork keeps the AeonDave tool surface (`delegate`, `delegation_read`,
 
 ```bash
 # 1. install the package as a dependency of the config dir
-cd ~/.config/opencode && npm install github:talha7k/opencode-background-agents
+cd ~/.config/opencode && npm install github:talha7k/opencode-background-agents#main
 
 # 2. shim it into the plugins directory
 cat > ~/.config/opencode/plugins/background-agents.ts <<'EOF'
-import BackgroundAgentsPlugin from "@aeondave/opencode-background-agents"
+import BackgroundAgentsPlugin from "@talha7k/opencode-background-agents"
 export default BackgroundAgentsPlugin
 EOF
 ```
