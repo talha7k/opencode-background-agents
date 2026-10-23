@@ -23,8 +23,6 @@ yarn-debug.log*
 yarn-error.log*
 
 # Environment / secrets
-.env
-.env.*
 !.env.example
 
 # OS cruft
@@ -36,7 +34,6 @@ desktop.ini
 .idea/
 *.swp
 *.swo
-.vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
 
@@ -44,3 +41,4 @@ desktop.ini
 .cache/
 .tmp/
 tmp/
+config.bat
